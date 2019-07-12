@@ -1,0 +1,222 @@
+       //方法为启动卖书进程，并进行些统计记录工作
+       public void sellrunThread(String userName,int bookNo,int sellBookNum,Socket socket,TransactionBookSystemMybatisRunner runner,InetAddress ipAddr) throws IOException {
+		try {
+			book.setBookNo(bookNo);
+			user.setUserName(userName);
+			//获得当前系统时间到1970年1月1日的毫秒数:System.currentTimeMillis()
+			//(结束时间-开始时间)/1000经过的秒数
+				book=(Book)this.bookImp.queryOne(book);
+	        	user=(User)this.userImp.queryOne(user);
+				//出售
+	            if(book.getStock() < book.getOverLimitStock()){
+				 this.info.setBookNo(bookNo);
+		    	 this.info.setOperation("sell");
+		    	 //判断库存的书籍是否低于库存下限
+		    	  if(book.getStock()-sellBookNum > book.getLowerLimitStock()) {
+				  //判断用户账户余额是否足够是否
+				     if(user.getAccount()-book.getSellPrice()*sellBookNum > 0.0) {
+				   //启动出售图书线程
+		    	 Thread threadSell=new Thread(new TransactionSellThread(sellBookNum,userName,bookNo,transactionService,bookImp,userImp,infoImp,socket,runner,ipAddr));
+		    	 //给前面的线程一定的更新时间
+		    	 threadSell.start();
+		    	 threadSell.join();
+		    	 //把info表中信息写入文档
+		         writeInfo(bookNo);
+				     Thread.sleep(1000);
+				 }
+				   else {
+		//不充足就要进行充值,因为程序在一致运行所以冲的值会用完，还要充值，所以流不能关闭
+					   System.out.println("用户"+userName+"余额不足,IP地址为"+ipAddr);  
+					   ReCharge(user,2,socket,runner,ipAddr);
+			    	  }
+		    	   }
+		    	else{
+		    		//通知系统用户增加库存,低于库存下限就显示库存不足
+		    		int warnStock=book.getStock()-book.getLowerLimitStock();
+		    		System.out.println("----------------------------------");
+		    		System.out.println("库存不足,当前库存为"+warnStock);
+		    		System.out.println("----------------------------------");
+		    		purchase(socket,4,runner,ipAddr,warnStock);
+		    	     }  
+				  }
+	           else {
+	            	//通知系统用户减少库存
+	            	System.out.println("----------------------------------");
+	    	     	System.out.println("库存高于库存，请通知系统用户增加库存");
+	    	     	System.out.println("----------------------------------");
+	            }
+	            
+	            
+	            
+	            //每个5分钟汇总一次出售书和采购数的情况
+	     if((System.currentTimeMillis()-startTime)/1000 > 300*summaryInterval) {
+	           this.bookList=this.bookImp.queryMore();
+	           Iterator<Book> ibookNo=this.bookList.iterator();
+	           int bookNoInt=0;
+	           while(ibookNo.hasNext()) {
+		           info.setBookNo(ibookNo.next().getBookNo());
+		           info.setOperation("sell");
+		           linfo=infoImp.queryList(info);
+		           Iterator<Info> iInfo=linfo.iterator();
+		           while(iInfo.hasNext()) {
+		        	   sellBookNoSet.add(iInfo.next().getBookNo());
+		           }
+	            }
+	           Iterator<Integer> iSellBookNo=sellBookNoSet.iterator();
+	           while(iSellBookNo.hasNext()) {
+		           bookNoInt=iSellBookNo.next();
+		           System.out.println(bookNoInt);
+		           book.setBookNo(bookNoInt);
+		           info.setBookNo(bookNoInt);
+		           info.setOperation("sell");
+		         //必须首先输入采购书籍的数据，否则会出错，并且无法计算出利润值
+		           sellNum=infoImp.queryForSum(info);
+		           System.out.println(sellNum);
+		           info.setOperation("incrementStock");
+		           buyNum=infoImp.queryForSum(info);
+		           System.out.println(buyNum);
+		           transactionService.summary(book, sellNum, buyNum, bookImp, infoImp, summaryImp);
+	           }
+	           summaryInterval++;
+	     }
+	             //每个10分钟统计一次收入，支出和利润.
+		     if((System.currentTimeMillis()-startTime)/1000 > 600*statisticsInterval) {
+		       transactionService.statistics(bookImp, summaryImp, statisticsImp);
+			   statisticsInterval++;
+			   }
+		     purchase(socket,1,runner,ipAddr,-1);
+		
+	  }
+        
+        上下分别为两个程序的部分代码
+-----------------------------------------------------------------------------------------------------------------------------------        
+        
+        //处理借出书籍的的方法，使用了线程同步锁
+	   @Transactional
+	  public synchronized void sell(String userName,int bookNo,int sellNum,TransactionDaoMybatisBookImp bookImp,TransactionDaoMybatisUserImp userImp,TransactionDaoMybatisInfoImp infoImp,Socket socket,TransactionBookSystemMybatisRunner runner,InetAddress ipAddr) throws IOException{
+		 Book book=new Book();
+		 book.setBookNo(bookNo);
+    	 //根据书号查询此类书借出的单价
+		 book=(Book)bookImp.queryOne(book);
+    	 double sellprice=book.getSellPrice();
+    	 /*如果借出的此类书籍的数量-此类书库存<=此类书的库存
+		     * 或者如果借出的此类书籍的数量*此类书的借出单价>用于此用户的账户余额
+		    * 借出此书籍的这个线程将被挂起
+		   */
+    	 //根据书号查询书的现有库存,新库存=现有库存-sellNum(此种书卖出的数量)
+    	 int stock=book.getStock();
+    	 //根据书号查询书的下限库存
+    	 //当前库存低于书的下限库存时，告知系统用户增加库存
+    	 if(book.getStock() < book.getLowerLimitStock()){
+	     	System.out.println("----------------------------------");
+	     	System.out.println("库存低于下限，请通知系统用户增加库存");
+	     	System.out.println("----------------------------------");
+    	 }
+         //根据用户名查询账户余额,新的余额为当前余额-(书的单价*书的数量)
+    	 User user=new User();
+    	 user.setUserName(userName);
+    	 user=(User)userImp.queryOne(user);
+    	 double account=user.getAccount();
+    	 double newAcccount=account-(sellprice*sellNum);
+	     int newStock=stock - sellNum;
+    	 book.setStock(newStock);
+    	 int updateStockNum=bookImp.update(book);
+    	 if(updateStockNum > 0) {
+    		 System.out.println("库存更新成功");
+    		 Date dateStockUpdate=new Date();
+    		 System.out.println("库存更新成功时间"+dateFormat.format(dateStockUpdate));
+    	 }
+    	 else {
+    		 System.out.println("库存更新失败");
+    		 runner.purchase(socket,2,runner,ipAddr,-1);
+    	 }
+    	 
+    	 user.setAccount(newAcccount);
+    	 int updateAccountNum=userImp.update(user);
+    	 if(updateAccountNum > 0) {
+    		 System.out.println("账户余额更新成功");
+    		 Date dateAccountUpdate=new Date();
+    		 System.out.println("账户余额更新成功时间"+dateFormat.format(dateAccountUpdate));
+    	 }
+    	 else {
+    		 System.out.println("账户余额更新失败");
+    		 runner.purchase(socket,2,runner,ipAddr,-1);
+    	 }
+   	     System.out.println("一次事务更新成功完成."+userName+"的账户余额为"+newAcccount);
+    	 System.out.println("一次事务更新成功完成."+bookNo+"的库存为"+newStock);
+    	 Date dateAllSuccess=new Date();
+    	 System.out.println("用户"+userName+"的账户余额为"+newAcccount);
+    	 System.out.println("用户"+userName+"的账户余额和"+bookNo+"的库存更新成功完成时间为"+dateFormat.format(dateAllSuccess));
+    	 //向信息表中插入借出书籍的信息
+    	 Info info=new Info();
+    	 info.setBookNo(bookNo);
+    	 info.setOperation("sell");
+    	 info.setBookNum(sellNum);
+    	 info.setOperationUserName(userName);
+    	 info.setInfoTime(dateFormat.format(dateAllSuccess));
+    	 int insertNum=insetInfo(info,infoImp);
+    	 if(insertNum>0) {
+    		 System.out.println("图书借出信息保存成功");
+    	 }
+    	 else {
+    		 System.out.println("图书借出信息保存失败");
+    	 }
+      }
+      
+  ------------------------------------------------------------------
+  //mybatis的某一映射文件
+  <?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org/DTD Mapper 3.0//EN" 
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+
+<mapper namespace="com.transactionDao.TransactionDaoMybatisSummaryInterface">
+<insert id="save" parameterType="Summary">
+   insert into summary(bookNo,income,expense,surplus,summaryTime) values(#{bookNo},#{income},#{expense},#{surplus},#{summaryTime})
+</insert>
+<update id="update" parameterType="Summary">
+   update summary set income= #{income},expense = #{expense},surplus= #{surplus} where bookNo = #{bookNo}
+</update>
+<delete id="delete" parameterType="int">
+   delete from summary where bookNo = #{bookNo}
+</delete>
+<select id="queryOne" parameterType="int" resultType="Summary">
+   select * from summary where bookNo = #{bookNo}
+</select>
+<select id="queryMore" resultType="Summary">
+   select * from summary
+</select>
+<select id="queryForIncome" parameterType="int" resultType="double">
+   select sum(income) from summary where bookNo = #{bookNo} 
+</select>
+<select id="queryForExpense" parameterType="int" resultType="double">
+   select sum(expense) from summary where bookNo = #{bookNo} 
+</select>
+<select id="queryForSurplus" parameterType="int" resultType="double">
+   select sum(surplus) from summary where bookNo = #{bookNo} 
+</select>
+<!-- 查询所有书最后一条的记录 -->
+<select id="queryForLastestInfo" parameterType="int" resultType="Summary">
+   select * from summary where bookNo= #{bookNo} and id=(select MAX(id) from summary where  bookNo= #{bookNo})
+</select>
+
+</mapper>
+
+----------------------------------------------------------------
+//spring配置文件的部分配置
+<!--
+1. 配置数据源的bean,使用apache的BasicDataSource 
+-->
+<bean id="dataSource" class="org.apache.commons.dbcp.BasicDataSource" destroy-method="close">
+        <property name="driverClassName" value="${driverClassName}" />
+        <property name="url" value="${url}" />
+        <property name="username" value="${username}" />
+        <property name="password" value="${password}" />
+</bean>
+<bean id="sqlSessionFactory"  class="org.mybatis.spring.SqlSessionFactoryBean">
+<property name="dataSource" ref="dataSource"></property>
+<!--typeAliasesPackage属性的值为要自动扫描的数据库表对应的实体类所在的包  -->
+<property name="typeAliasesPackage" value="com.transactionEntityBean"/>
+<!-- 自动扫描增删改查接口对应的mapping.xml文件 -->
+<property name="mapperLocations" value="classpath:com/transactionDao/**/*.xml" />
+</bean>
+ 
