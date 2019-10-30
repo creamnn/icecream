@@ -1,0 +1,264 @@
+#_*_coding:gb2312utf-8_*_
+
+from bs4 import BeautifulSoup
+import numpy as np
+import pandas as pd
+import requests
+import time
+import threading
+from sqlalchemy import create_engine
+def get_url(num,list_urlx):
+ url='http://cd.newhouse.fang.com/house/s/b9'+str(num)+'/?ctm=1.cd.xf_search.page.1'
+ headers={'user-agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.110 Safari/537.36'}
+ try:
+     res=requests.get(url,headers=headers)#当要添加header,防止被过滤
+     res.encoding='gb2312'#requests.get的编码使用gb2312
+     if res.status_code==200:#当res.status_code==200为正常状态
+       soup=BeautifulSoup(res.text,'html.parser')#把res.text获取的代码交给BeautifulSoup的html.parser解析器处理
+       list1=soup.select('.nlcd_name a')
+       for i in range(0,len(list1)):
+          if soup.select('.nlcd_name a')[i]['href'] not in list_urlx:#去重
+            list_urlx.append(soup.select('.nlcd_name a')[i]['href'])#使用循环遍历select函数提取nlcd_name类中的每一个超链接标签中的地址（就是href中的值）,.nlcd_name表示nlcd_name这个类，.nlcd_name a表示nlcd_name这个类中的<a></a>标签
+ except Exception as e:
+       raise e
+     
+
+def get_urlx(list_url,list_url1,list_url2):
+ headers={'user-agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.110 Safari/537.36'}
+ try:
+        res=requests.get('http:'+list_url,headers=headers)
+        res.encoding='gb2312'
+        if res.status_code==200:
+          soup=BeautifulSoup(res.text,'html.parser')
+          list_url1.append(soup.select('.nav a')[1]['href'])#使用select函数提取nav类中的第二个超链接标签中的地址（就是href中的值）,.nav表示nav这个类，.nav a表示nav这个类中的<a></a>标签
+          list_url2.append(soup.select('.nav a')[3]['href'])#使用select函数提取nav类中的第四个超链接标签中的地址（就是href中的值）,.nav表示nav这个类，.nav a表示nav这个类中的<a></a>标签
+ except Exception as e:
+     raise e
+
+     
+def get_info(list_url1,list_url2,house_list):
+ headers={'user-agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.110 Safari/537.36'}
+ try:
+          house={}
+          area=''
+          res=requests.get('http:'+list_url1,headers=headers)
+          res.encoding='gb2312'
+          res1=requests.get('http:'+list_url2,headers=headers)
+          res1.encoding='gb2312'
+          if res.status_code==200:
+             soup=BeautifulSoup(res.text,'html.parser')
+             house['名称']=soup.select('.ts_linear')[0].get_text(strip='\n,\t')#使用select函数提取ts_linear类中的第一个标签的内容，并去除'\n,\t'，get_text函数是取出标签中内容并且转为字符串
+             house['单价']=soup.select('.main_1200 em')[0].get_text(strip='\n,\t')
+             decorate=soup.select('.list-right')[3].get_text(strip='\n,\t')  
+             if len(decorate)>6 and decorate[0:2]!='毛坯' and decorate[0:3]!='非毛坯':
+                    house['装修']='暂无'
+             else:
+                    house['装修']=soup.select('.list-right')[3].get_text(strip='\n,\t')
+             soup1=BeautifulSoup(res1.text,'html.parser')
+             if soup1.select('.tiaojian span'):
+                house['户型']=soup1.select('.tiaojian span')[0].get_text(strip='\n,\t')
+                area=soup1.select('.tiaojian span')[1].get_text(strip='\n,\t')[0:5]#使用select函数提取tiaojian类中的span标签的第一个标签的内容的前5个字符并去除'\n,\t'，
+                house['面积']=area
+             #计算出总价
+             if area:
+                 if     len(house['单价']) == 13 :
+                    house['总价']=int(float(house['单价'][3:8])* float(area))
+                 elif  len(house['单价']) == 12 and house['单价'][0:3]== '均价约' :
+                    house['总价']=int(float(house['单价'][3:7])* float(area))
+                 elif  len(house['单价']) == 12 and house['单价'][2]!= '约' and house['单价'][0]!= '约':
+                    house['总价']=int(float(house['单价'][2:6])* float(area))
+                 elif  len(house['单价']) == 12 and house['单价'][0]== '约' :
+                    house['总价']=int(float(house['单价'][1:6])* float(area))
+                 elif  len(house['单价']) == 11 and house['单价'][0]== '约': 
+                    house['总价']=int(float(house['单价'][1:5])* float(area))
+             else:
+                house['总价']='暂无'
+          house_list.append(house)
+ except Exception as e:
+     raise e
+        
+if __name__=='__main__':  
+ #使用多线程运行函数get_url
+ list_urlx=[]
+ threads1=[]
+ for i in range(1,41):
+   t=threading.Thread(target=get_url,args=(i,list_urlx))#把函数装入线程中，target为函数名，args为传入的参数
+   threads1.append(t)
+ for i in range(0,40):
+    threads1[i].start()#使用遍历启动每一个线程
+ for i in range(0,40):
+    threads1[i].join()#使每一个线程都结束后，才执行后面的代码
+ print(list_urlx)
+ print(len(list_urlx)) 
+#使用多线程运行函数get_urlx
+ list_url1=[]
+ list_url2=[] 
+ threads2=[]
+ for i in range(0,len(list_urlx)):
+    t=threading.Thread(target=get_urlx,args=(list_urlx[i],list_url1,list_url2))
+    threads2.append(t)
+ for i in range(0,len(list_urlx)):
+    time.sleep(1)
+    threads2[i].start()
+ for i in range(0,len(list_urlx)):
+    threads2[i].join()
+ #使用多线程运行函数get_infoget_urlx
+ threads=[]
+ house_list=[]
+ for i in range(0,len(list_url1)):
+   t=threading.Thread(target=get_info,args=(list_url1[i],list_url2[i],house_list))
+   threads.append(t)
+ for i in range(0,len(list_url1)):
+     time.sleep(1)
+     threads[i].start()
+     time.sleep(1)
+ for i in range(0,len(list_url1)):
+      threads[i].join()   
+#-----------------------------------------------使用多线程爬虫获取网站中的我们所需的数据
+#数据爬取的数据存入文件或者是数据库
+from sqlalchemy import create_engine #如果没有sqlalchemy模块要使用pip安装(pip install flask-SQLAlchemy),python3.5以后都有pip，但是要把pip文件夹加入环境变量
+import pymysql        #如果没有pymysql模块要使用pip安装，anaconda默认命令行有pip
+import pandas as pd
+columns=('名称','单价','装修','户型','面积','总价')
+df=pd.DataFrame(house_list,columns=columns)#使用爬取的数据列表创建DataFrame
+# root是mysql数据库用户名，RSlf2017是mysql数据库密码,192.168.196.128:3306是mysql数据库地址和端口号，house是数据库名称，charset=utf8设置连接的字符集为utf8
+conn=create_engine('mysql+pymysql://root:RSlf2017@192.168.196.128:3306/house?charset=utf8')#创建跟mysql数据库的连接，字段的字符集要设置成utf8 ，否则要报错，因为默认不支持中文
+#修改数据库enterprises的字符集
+#alter database enterprises character set utf8
+#修改数据表employees的字符集：
+#alter table employees character set utf8
+#修改字段的字符集
+#alter table employees change name name char(10) character set utf-8;
+#df是要存入数据库的ataFrame，'house_price'是表名称，conn是连接，schema='house'是数据库名称，if_exists='append'表示数据存在就再次添加
+pd.io.sql.to_sql(df,'house_price',conn,schema='house',if_exists='append')#把构造的DataFrame存入mysql数据库中(使用orm)
+df.to_csv('1.txt')#把构造的DataFrame写入csv文件1.txt中
+df=pd.DataFrame() #把内存里面的数据制空
+df2=pd.read_csv('1.txt')#从csv文件1.txt中读取全面数据赋值给df2变量
+#-----------------------------------------------数据爬取的数据存入文件或者是数据库
+#进行数据分析前的预处理
+df1=pd.io.sql.read_sql(sql='select * from house_price',con=conn)#读取数据库中的数据存入DataFrame中，sql为sql语句，con为连接
+del df1['index'] #去除对于数据分析没有用的列index
+df1.info() #可以查看dataframe的总体信息,查看到有多少数据为空，在进行处理
+df1.dropna(how='any',inplace=True) #如果一行数据有1处为空这一行数据就会被删除,how='any'表示检查这一行的每个数据,inplace = True：不创建新的对象，直接对原始对象进行修改；inplace = False：对数据进行修改，创建并返回新的对象承载其修改结果。
+print(df1.sort_values(['单价']).head()) #使用dataframe的单价进行排序，并显示dataframe的前5行，head函数，默认是调取前5行，参数是要调取的行数
+df1.info()
+df1=df1[df1['户型']!='开间']#如果户型不是开间的列元素保留存回df1
+print(df1.sort_values(['户型']).head())
+df1[['室','厅','厨','卫']]=df1['户型'].str.extract('(\d+)室(\d+)厅(\d+)厨(\d+)卫')#从dataframe的户型列中调取室','厅','厨','卫前面正则表达式匹配的数字的值赋值给新生成的室','厅','厨','卫四列，()里面是要提取的正则表达式的值，\d+表示整数开头的数字一个或一个以上
+del df1['户型'] #去除对于数据分析没有用的列户型
+print(df1.head())
+df_decorate=pd.get_dummies(df1['装修'])#把装修的类型虚拟成数值赋给df_decorate
+print(df_decorate)
+df1['室']=df1['室'].astype(float)#把室这一列的值转化为浮点型
+df1['厅']=df1['厅'].astype(float)#把厅这一列的值转化为浮点型
+df1['厨']=df1['厨'].astype(float)#把厨这一列的值转化为浮点型
+df1['卫']=df1['卫'].astype(float)#把卫室这一列的值转化为浮点型
+del df1['装修']#去除对于数据分析没有用的列装修
+df1['单价']=df1['单价'].map(lambda x:x.replace('元/平方米','').replace('均价约','').replace('起','').replace('约','').replace('均价',''))#使用map函数中的匿名函数把单价列中的不是数字类型的字符串去掉
+df1['单价']=df1['单价'].astype(float)#把单价列的元素转化成浮点型
+df1=pd.concat([df1,df_decorate],axis=1)#把原有的df1和装修的类型虚拟成数值df_decorate按行连接到一起，pandas中axis=1是按行连接
+df1['面积']=df1['面积'].astype(float)#把面积列的元素转化成浮点型
+df1['总价']=df1['总价'].astype(float)#把总价列的元素转化成浮点型
+del df1['名称']#去除对于数据分析没有用的列名称
+del df1['暂无']#去除对于数据分析没有用的列名称
+del df1['暂无资料']#去除对于数据分析没有用的列名称
+del df1['非毛坯,公共部分简单']#去除对于数据分析没有用的列名称
+print(df1.head())
+#-----------------------------------------------进行数据分析前的预处理
+#把面积作为横坐标，总价作为纵坐标画出散点图
+df1=df1[df1['面积']<300]#把面积大于200的数据去除
+area=df1['面积']
+totally_price=df1['总价']
+import matplotlib.pyplot as plt
+fig=plt.figure()
+fig.add_subplot(1,1,1)
+plt.scatter(area,totally_price,c='g')#把面积作为横坐标，总价作为纵坐标画出散点图
+fig.show()
+#---------------------------------------------------------把面积作为横坐标，总价作为纵坐标画出散点图
+#使用单元线性回归进行模拟，使用面积预测总价走势
+from sklearn.linear_model import LinearRegression
+import numpy as np
+regress=LinearRegression()#实例化线性回归
+model=regress.fit(area.values.reshape(-1, 1),totally_price.values.reshape(-1, 1))#把自变量面积和因变量总价装填进去进行训练，使用面积来预测房价走势，这里的自变量和因变量都要是矩阵，需要使用area.values.reshape(-1, 1)把面积重整为矩阵，需要使用totally_price.values.reshape(-1, 1)把总价重整为矩阵
+print(model.intercept_,model.coef_)#打印截距和回归系数
+#预测价格
+pre_totally_price=model.predict(area.values.reshape(-1,1))#使用面积来预测房价走势
+print(pre_totally_price)
+#---------------------------------------------------------使用单元线性回归进行模拟，使用面积预测总价走势把面积作为横坐标，总价作为纵坐标画出散点图
+#使用面积为x轴，上面预测出来的总价为外轴，画出拟合直线
+import matplotlib.pyplot as plt
+fig=plt.figure()
+fig.add_subplot(1,1,1)
+plt.scatter(area,totally_price,c='g')#把面积作为横坐标，总价作为纵坐标画出散点图
+plt.plot(area,pre_totally_price,color='red')#画出拟合直线
+fig.show()
+#---------------------------------------------------------使用面积为x轴，上面预测出来的总价为外轴，画出拟合直线离合直线
+#使用除了总价之外的其他数据进行多元线性分析
+X=df1[['单价','面积','室','厅','厨','卫','毛坯','毛坯,公共部分简单装','毛坯,非毛坯','非毛坯']]#把除了总价外的所有的数据作为自变量来预测总价
+Y=df1['总价']#提取出总价作为因变量
+print(Y.head())
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+X_train,X_test,Y_train,Y_test=train_test_split(X,Y,test_size=0.2,random_state=123)#使用训练测试分离函数把测试数据和训练数据分离出来，按测试数据占0.2的比例，注意这里的自变量和因变量要是Series
+regress_mutli=LinearRegression()#实例化线性回归
+model=regress_mutli.fit(X_train,Y_train)#使用训练数据和训练结果进行填充来训练，这里的训练数据和训练结果是Series
+pre_totally_price1=model.predict(X_test)#使用测试数据进行预测，这里的测试数据是Series
+score=model.score(X_test,Y_test)#计算出机器学习模型的得分，越接近1越好
+print(score)
+#---------------------------------------------------------使用除了总价之外的其他数据进行多元线性分析预测房价
+#使用假设验证法，选取出最优的数据特征组合来预测房价
+import statsmodels.api as sm #使用statsmodels.api，要首先pip install statsmodels
+X=df1[['单价','面积','室','厅','厨','卫','毛坯','毛坯,公共部分简单装','毛坯,非毛坯','非毛坯']]#把除了总价外的所有的数据作为自变量来预测总价
+Y=df1['总价']#提取出总价作为因变量
+X_=sm.add_constant(X)#把除了总价外的所有的数据作为自变量添加成常量
+result=sm.OLS(Y,X_)#使用最小平方法，第一个参数为因变量，第二个参数为自变量
+summary=result.fit()#使用fit函数进行填充训练
+print(summary.summary2())#调用summary2函数，打印出假设验证法的系列信息
+#打印出的结果:
+#其中R-squared值越接近1越好，一般大于0.6才算好，AIC值一般越小越好，因此可以选取几重数据特征作为模型，计算后对比R-squared值和AIC值，选出最好的组合模型。
+#                        Results: Ordinary least squares
+#================================================================================
+# Model:                   OLS                  Adj. R-squared:         0.917       
+#  Dependent Variable:      总价                   AIC:                    7661.7175 
+#  Date:                    2019-01-06 10:58     BIC:                    7701.3409 
+#  No. Observations:        271                  Log-Likelihood:         -3819.9   
+#  Df Model:                10                   F-statistic:            300.4     
+#  Df Residuals:            260                  Prob (F-statistic):     1.33e-136 
+#  R-squared:               0.920                Scale:                  1.0682e+11
+# --------------------------------------------------------------------------------
+
+#---------------------------------------------------------使用假设验证法，选取出最优的数据特征组合来预测房价
+#使用AIC值，找出AIC值最小的属性作为预测特征属性，找出最小的AIC值的属性特征组合
+import itertools
+X=df1[['单价','面积','室','厅','厨','卫','毛坯','毛坯,公共部分简单装','毛坯,非毛坯','非毛坯']]#把除了总价外的所有的数据作为自变量来预测总价
+acis={}
+for i in range(1,len(X)+1):
+    for variables in itertools.combinations(X,i):
+        x1=sm.add_constant(df1[list(variables)])
+        x2=sm.OLS(Y,x1)
+        res=x2.fit()
+        acis[variables]=res.aic
+from collections import Counter
+counter=Counter(acis)#使用collections的Counter计数器对acis字典进行统计
+counter.most_common()[::-10]#按照最大值到最下值排序，并取出最后的10个值（最后一个值就是AIC最小值）
+#('单价', '面积', '室', '厨'), 7654.181030609697)这个就是最小AIC值组合
+#---------------------------------------------------------使用AIC值，找出AIC值最小的属性作为预测特征属性，找出最小的AIC值的属性特征组合
+#使用最优AIC值组合，重新进行房价预测和R-squared值计算
+X=df1[['单价', '面积', '室', '厨']]#把最优AIC值属性特征组合('单价', '面积', '室', '厨')作为自变量
+Y=df1['总价']#提取出总价作为因变量
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+X_train,X_test,Y_train,Y_test=train_test_split(X,Y,test_size=0.2,random_state=123)#使用训练测试分离函数把测试数据和训练数据分离出来，按测试数据占0.2的比例，注意这里的自变量和因变量要是Series
+regress_mutli1=LinearRegression()#实例化线性回归
+model1=regress_mutli1.fit(X_train,Y_train)#使用训练数据和训练结果进行填充来训练，这里的训练数据和训练结果是Series
+print(model.intercept_,model.coef_)#打印截距和回归系数
+pre_totally_price1=model1.predict(X_test)#使用测试数据进行预测，这里的测试数据是Series
+score1=model1.score(X_test,Y_test)#计算出机器学习模型的得分，越接近1越好
+print(score1)
+#---------------------------------------------------------使用最优AIC值组合，重新进行房价预测和R-squared值计算
+#计算绝对误差和均方误差的方法和另一种计算R-squared值的方法
+from sklearn.metrics import r2_score,mean_absolute_error,mean_squared_error
+print('R-squared值为:{}'.format(r2_score(model1.predict(X_test),Y_test)))
+print('绝对误差值为:{}'.format(mean_absolute_error(model1.predict(X_test),Y_test)))
+print('均方误差值为:{}'.format(mean_squared_error(model1.predict(X_test),Y_test)))
+#---------------------------------------------------------计算绝对误差和均方误差的方法和另一种计算R-squared值的方法
